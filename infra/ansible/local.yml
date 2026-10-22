@@ -1,0 +1,57 @@
+---
+- name: Configure the private local kind environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    state_dir: "{{ lookup('env', 'HOME') }}/.config/gradeflow"
+    kubeconfig_path: "{{ state_dir }}/kubeconfig"
+  tasks:
+    - name: Check local tools (no privilege escalation or system package changes)
+      ansible.builtin.command: "{{ item }} version"
+      loop: [docker, kind]
+      changed_when: false
+
+    - name: Create private deployment state directory
+      ansible.builtin.file:
+        path: "{{ state_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: List kind clusters
+      ansible.builtin.command: kind get clusters
+      register: clusters
+      changed_when: false
+
+    - name: Create the GradeFlow cluster only when absent
+      ansible.builtin.command:
+        argv: [kind, create, cluster, --config, "{{ repo_root }}/local/kind.yaml", --kubeconfig, "{{ kubeconfig_path }}", --wait, 120s]
+      when: "'gradeflow' not in clusters.stdout_lines"
+      changed_when: true
+
+    - name: Read cluster credentials without modifying the default kubeconfig
+      ansible.builtin.command: kind get kubeconfig --name gradeflow
+      register: cluster_config
+      changed_when: false
+      no_log: true
+
+    - name: Store private cluster credentials idempotently
+      ansible.builtin.copy:
+        content: "{{ cluster_config.stdout }}\n"
+        dest: "{{ kubeconfig_path }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Check namespace drift
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ kubeconfig_path }}", --context, kind-gradeflow, diff, -f, "{{ repo_root }}/k8s/namespace.yaml"]
+      register: namespace_diff
+      failed_when: namespace_diff.rc not in [0, 1]
+      changed_when: false
+
+    - name: Reconcile namespace only when different
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ kubeconfig_path }}", --context, kind-gradeflow, apply, -f, "{{ repo_root }}/k8s/namespace.yaml"]
+      when: namespace_diff.rc == 1
+      changed_when: true

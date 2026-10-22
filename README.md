@@ -1,277 +1,217 @@
-# GradeFlow — tested static portal with Jenkins, Docker, K3s, Terraform and Ansible
+# GradeFlow — local DevOps + Render Free (no OCI account)
 
-GradeFlow displays Google Forms/Sheets submissions through an external Google Apps Script JSON endpoint. It preserves the original HTML/CSS interface, refresh, activity feed and browser-local frequent-student highlighting. **It does not grade assignments or store marks.** Original frontend by Prishu Raj Singh; this upgrade targets the [Joshi-taro/GradeFlow fork](https://github.com/Joshi-taro/GradeFlow), not the original repository.
+GradeFlow displays Google Forms/Sheets submissions through an external Google Apps Script JSON endpoint. The frontend, browser-local frequent-student highlighting and existing API integration are preserved. **It does not grade assignments or store marks.** Original frontend by Prishu Raj Singh; all changes belong to [Joshi-taro/GradeFlow](https://github.com/Joshi-taro/GradeFlow).
+
+The primary path needs no cloud VM, registry subscription or credit card: Docker runs a private Jenkins controller, a trusted Linux/WSL host agent builds images, and kind runs two local replicas. Render Free hosts a separate public Docker web service built from the same approved Git commit. Render does **not** host Jenkins or the kind cluster, and its rebuilt image is not asserted to have the same digest as the locally built image.
 
 ```mermaid
-flowchart LR
-  F[Google Form] --> S[Google Sheet]
-  S --> A[External Apps Script JSON API]
-  B[Student browser] -->|HTTPS fetch| A
-  B -->|localhost SSH tunnel + port-forward| N[Nginx pods / ClusterIP]
-  G[Your GitHub fork] --> J[Private Jenkins controller]
-  J --> T[Isolated trusted Linux agent]
-  T --> Q[Lint + unit/DOM tests + Terraform mock tests]
-  Q --> D[Docker build + container smoke]
-  D --> R[GHCR commit tag / amd64 + arm64]
-  T -->|human-approved saved plan| O[Terraform / OCI A1 + SSH-only network]
-  T -->|approved SSH configuration| C[Ansible / Ubuntu + K3s]
-  O --> C
-  R --> N
-  T -->|scoped kubeconfig via SSH tunnel| K[K3s rollout + smoke checks]
-  K --> N
+flowchart TD
+  G[Your GitHub fork / main] --> A[GitHub Actions: PR and push checks]
+  G --> J[Jenkins controller in local Docker / loopback 8081]
+  TF[Terraform Docker provider / local state] --> N[Private Jenkins network + persistent home volume]
+  N --> J
+  J -->|authenticated WebSocket| W[Single-executor trusted Linux or WSL host agent]
+  W --> T[Lint + HTML validation + unit and DOM tests + Render guard tests]
+  T --> V[Terraform mocks + Ansible syntax]
+  V --> D[Docker build: gradeflow full-commit tag + hardened smoke]
+  D --> AN[Ansible: idempotent kind + private kubeconfig + namespace]
+  AN --> K[kind image load / Deployment + ClusterIP / two replicas]
+  K --> C[Rollout validation + local HTTP smoke]
+  C --> H[Named human approval / main only]
+  H -->|Jenkins secret API key / exact commit| R[Render Free Docker build / 8080 / healthz]
+  R --> P[HTTPS public URL smoke / no success until verified]
+  B[Student browser] --> R
+  B -->|fetch JSON directly| GS[External Google Apps Script]
+  F[Google Form] --> S[Google Sheet] --> GS
 ```
 
-The default deployment is private: no Ingress, NodePort, cloud load balancer, public Jenkins, public Kubernetes API or Docker API/socket. The VM has an ephemeral public IP for SSH **only from your operator /32**. The browser calls Google directly; Kubernetes does not host the Sheet/API. A single VM is not highly available, even with two replicas.
+## Cost and security boundaries
 
-Audit and known defects: [docs/AUDIT.md](docs/AUDIT.md). Recorded checks and limits: [docs/VERIFICATION.md](docs/VERIFICATION.md).
+Use a free Render workspace and **Free** web service only. No database, persistent disk, custom domain purchase, paid build tier or paid instance is needed. Render's [Free documentation](https://render.com/docs/free) describes idle sleep after 15 minutes, cold starts, usage limits and suspension. Do not add uptime pings to defeat sleeping. Local Docker/WSL uses your own machine's resources. Docker Desktop is free for personal/educational use subject to its license; Linux Docker Engine is another option.
 
-## Prerequisites and cost boundary
+A no-card account must actually be permitted by Render. **If your account requests a card or paid upgrade, stop; do not enter payment details or switch plans.** Local Jenkins/kind still provides the complete six-tool university demonstration, but the public-hosting requirement remains blocked. No provider can be promised to waive account verification. The public deployment is a university demo, not highly available production hosting.
 
-Use Linux or Ubuntu 24.04 WSL with Bash for deployment commands. Install Git, Node **24.15.0**, npm **12.2.1**, Python 3.12 plus `python3-venv`, Docker Engine/Desktop with Buildx, `kubectl` compatible with your cluster, Terraform **1.16.3** (minimum 1.7 for mocks), SSH, curl and optionally kind. Jenkins agents additionally need Java 21 and the tools above. Do not run Ansible from native Windows.
+Jenkins binds only to `127.0.0.1:8081`; kind API and port-forwards bind loopback. No public Docker socket, Jenkins endpoint, Kubernetes admin interface or ingress is created. The controller has no Docker socket. The host agent has Docker access (effectively host-admin access), so run **only reviewed main code** there. PRs run on disposable GitHub Actions runners with no deployment secrets. The local kind kubeconfig is cluster-admin for this disposable local cluster only; do not use it for cloud or shared clusters.
 
-OCI requires your account, home region, compartment, availability domain, an SSH key pair and a reviewed **Canonical Ubuntu 24.04 ARM platform image** compatible with `VM.Standard.A1.Flex`. Select the image OCID in that region; never use a paid Marketplace image. No cloud credentials are needed for local tests.
+## Exact numbered setup guide
 
-As checked on 2026-10-22, [Oracle's current Always Free documentation](https://docs.oracle.com/cd/E97706_01/Content/FreeTier/resourceref.htm) lists 1,500 A1 OCPU hours and 9,000 GB hours monthly (approximately 2 OCPUs/12GB), and 200GB combined boot/block storage. Older tutorials often quote 4 OCPUs/24GB. This configuration uses **one A1 VM, 2 OCPUs, 6GB RAM, 50GB balanced boot volume**; it adds no NAT gateway, reserved IP, paid load balancer, database, backup policy or extra volume. The limits are shared with everything else in your tenancy. Verify your own current terms, remaining quotas, image eligibility, free storage and egress before approval; Terraform cannot certify a zero bill. Use an unupgraded free account where appropriate and inspect Cost Analysis; budget alerts are not spending caps. A1 capacity may be unavailable and idle free VMs may be reclaimed. **Use local kind if unavailable; do not substitute a paid shape/region or retry a paid service.**
+Commands are Bash in Ubuntu 24.04 or Ubuntu 24.04 WSL2, from the repository root unless stated otherwise. Keep your Linux repository under `~/GradeFlow`, not a Windows-mounted folder, for normal use. Docker Desktop users must enable Linux containers and WSL integration for their Ubuntu distribution. Allocate roughly 4 CPUs / 8 GB to Docker if available. Keep the laptop and agent running during Jenkins builds.
 
-## Local frontend and reproducible checks
+### 1. Review and merge the no-card PR in your fork
 
-All commands below start from the fork's repository root unless `cd` is shown. Replace explicit `YOUR_...` values; do not paste them unchanged.
+Wait for all GitHub checks to pass. This PR does not connect or deploy Render. Then:
 
 ```bash
-git clone https://github.com/Joshi-taro/GradeFlow.git
-cd GradeFlow
-git switch main                    # after merging the upgrade PR into your fork
-node --version                     # v24.15.0
-npm --version                      # 12.2.1
+git clone https://github.com/Joshi-taro/GradeFlow.git ~/GradeFlow
+cd ~/GradeFlow
+git switch main
+# If already cloned: git switch main && git pull --ff-only origin main
+```
+
+### 2. Prepare the local Linux tools and run tests
+
+Install Docker Engine using its [Ubuntu guide](https://docs.docker.com/engine/install/ubuntu/), or use Docker Desktop WSL integration. `docker info` must work as your normal user. Do not enable an unauthenticated TCP daemon. Then inspect and run the supplied official-download installer (uses sudo for Ubuntu packages):
+
+```bash
+less scripts/install-local-tools.sh
+bash scripts/install-local-tools.sh
+export PATH="$HOME/.local/bin:$PATH"
+# Put that export in ~/.profile too, and use it in the agent terminal.
+node --version                       # v24.15.0
+terraform version                    # v1.16.3
+kind version                         # v0.33.0
+kubectl version --client              # v1.36.4
+java -version                        # Java 21
+docker info
 npm ci --ignore-scripts
-npm run check                      # ESLint + HTML validation + Node unit/DOM tests
-npm run serve                      # loopback only, http://127.0.0.1:8080
-```
-
-In another terminal at the repository root:
-
-```bash
-npm run smoke -- http://127.0.0.1:8080
-terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
-terraform -chdir=infra/terraform fmt -check -recursive
-terraform -chdir=infra/terraform validate
-terraform -chdir=infra/terraform test    # mock provider only; no cloud resources
+npm run check
 python3 -m venv .runtime/venv
 .runtime/venv/bin/pip install -r infra/ansible/requirements.txt
-.runtime/venv/bin/ansible-playbook --syntax-check -i infra/ansible/inventory.ini.example infra/ansible/site.yml
-for script in scripts/*.sh; do bash -n "$script"; done
+.runtime/venv/bin/ansible-playbook --syntax-check -i localhost, infra/ansible/local.yml
 ```
 
-The Node tests exercise actual dashboard JavaScript with mocked API data in jsdom. They cover stored HTML injection, unsafe links, HTTP/malformed API errors, retry, empty results, invalid timestamps, frequent-student sorting, storage corruption, timeout and refresh races. They do not fetch real students' data. Smoke testing checks HTTP content and assets; it does not prove the external API is reachable. `healthz` checks Nginx; Apps Script availability is a separate browser check.
+The installer verifies downloads against vendor checksum files over HTTPS. It supports Linux amd64 and arm64. Ansible runs on Linux, not native Windows. Node 20 is too old for the existing HTML validator.
 
-## Docker and local Kubernetes
+### 3. Review Terraform's local Jenkins plan, then approve it yourself
 
-The base Nginx multi-platform index is pinned by digest. The image serves only five frontend assets plus CSS, runs as UID/GID 101 on 8080, and writes temporary files only under `/tmp`. No source repository, state or credentials enter the image. Rebuild deliberately when updating base digests.
-
-```bash
-COMMIT=$(git rev-parse HEAD)
-IMAGE="gradeflow:$COMMIT"
-docker build -t "$IMAGE" .
-docker run --name gradeflow-demo --rm -d --read-only \
-  --tmpfs /tmp:uid=101,gid=101,mode=1777,size=16m \
-  --cap-drop=ALL --security-opt=no-new-privileges \
-  -p 127.0.0.1:8080:8080 "$IMAGE"
-npm run smoke -- http://127.0.0.1:8080
-docker inspect --format '{{.State.Health.Status}}' gradeflow-demo  # after healthcheck interval
-docker stop gradeflow-demo
-kind create cluster --config local/kind.yaml
-kind load docker-image "$IMAGE" --name gradeflow
-kubectl --context kind-gradeflow apply -f k8s/namespace.yaml
-kubectl config use-context kind-gradeflow
-bash scripts/deploy.sh "$IMAGE"
-bash scripts/deploy-smoke.sh
-kubectl -n gradeflow port-forward --address 127.0.0.1 service/gradeflow 8080:80
-# Visit http://127.0.0.1:8080; Ctrl-C ends the port-forward.
-```
-
-`local/kind.yaml` pins a Kubernetes v1.36.4 node digest (kind v0.33.0) with a loopback-only API. For another supported version review the namespace's pinned Pod Security version (v1.36). For an existing local K3s server use its admin kubeconfig, apply the namespace, import the image with `mkdir -p .runtime && docker save "$IMAGE" -o .runtime/gradeflow.tar` then `sudo k3s ctr images import .runtime/gradeflow.tar`, and run the same deploy/verify commands. Ansible supports Ubuntu 24.04+ with swap disabled; the playbook can also configure an approved local Ubuntu VM. A local K3s install is privileged host configuration, so review it before running.
-
-## Oracle infrastructure — approval required
-
-**Do not execute `terraform apply` until you explicitly approve provisioning. No apply was run to prepare this repository.** The following is the command sequence for the operator after review, not an automatic action. First prepare a separate SSH key with a passphrase and store OCI API credentials outside Git using `~/.oci/config` or the provider's `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY_PATH` environment variables. Limit the OCI IAM principal to the chosen compartment's required compute/network operations. Never place the OCI private key in tfvars.
-
-```bash
-ssh-keygen -t ed25519 -f "$HOME/.ssh/gradeflow" -C gradeflow
-mkdir -p "$HOME/.local/state/gradeflow"
-chmod 700 "$HOME/.local/state/gradeflow"
-cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
-# Edit terraform.tfvars: home region, compartment, AD, Ubuntu ARM image OCID,
-# public key from ~/.ssh/gradeflow.pub, and YOUR operator's public IPv4 /32.
-# Keep free_tier_confirmed=false until account eligibility/budget are reviewed.
-terraform -chdir=infra/terraform init -reconfigure -input=false -lockfile=readonly \
-  -backend-config="path=$HOME/.local/state/gradeflow/terraform.tfstate"
-terraform -chdir=infra/terraform validate
-# After explicit provisioning approval + eligibility review, edit
-# free_tier_confirmed=true. This acknowledgement alone cannot guarantee cost.
-umask 077
-terraform -chdir=infra/terraform plan -input=false \
-  -var-file=terraform.tfvars -out=approved.tfplan
-terraform -chdir=infra/terraform show approved.tfplan
-# STOP: approve exactly this plan. Expected: VCN, IGW, route table, SSH-only
-# security list, subnet and ONE A1 instance. Stop for any unexpected resource.
-terraform -chdir=infra/terraform apply approved.tfplan   # ONLY after explicit approval
-terraform -chdir=infra/terraform output
-rm -f infra/terraform/approved.tfplan
-```
-
-Do not run these commands in a different state directory to manage the same VM. Local state contains sensitive IDs and may contain secrets; keep it on encrypted persistent storage, permissions 0600, with encrypted offline backups. Never commit or upload state/plan files as public artifacts. Commit `.terraform.lock.hcl`, which includes checksums for Linux ARM/x86 and Windows x86. State is serialized by local backend file locks and Jenkins disables concurrent builds; allow only one operator/job against it. For a team, design an approved encrypted locking backend separately; no paid state service is assumed. Avoid ephemeral Jenkins workspace state. `prevent_destroy` protects the VM but is not a complete cost or deletion guard. No automatic destroy is included; deletion or replacement needs a separately reviewed plan and explicit approval.
-
-## Ansible and private cluster access
-
-After the VM exists, copy its public IP from Terraform outputs. Confirm the SSH host fingerprint through Oracle's instance console/trusted channel before adding a host key. `ssh-keyscan` alone does not authenticate a host. Keep a working SSH session/console available when changing SSH settings. The playbook disables root/password login, retains key login and SSH forwarding, checks Ubuntu/architecture/no-swap, installs prerequisites, configures networking and installs a versioned SHA256-verified K3s binary with systemd. It disables Traefik and ServiceLB and keeps kubeconfig root-only. It does not install a public Jenkins service. Run it twice to demonstrate idempotency after initial setup.
-
-```bash
-export VM_IP=YOUR_TERRAFORM_PUBLIC_IP
-export SECURE_DIR="$HOME/.local/share/gradeflow-secrets"
-mkdir -p "$SECURE_DIR"
-chmod 700 "$SECURE_DIR"
-cp infra/ansible/inventory.ini.example "$SECURE_DIR/inventory.ini"
-# Edit ansible_host in "$SECURE_DIR/inventory.ini" to the approved VM IP.
-ssh-keyscan -H "$VM_IP" > "$SECURE_DIR/known_hosts.candidate"
-ssh-keygen -lf "$SECURE_DIR/known_hosts.candidate"
-# Compare with the verified console fingerprint BEFORE the next command.
-mv "$SECURE_DIR/known_hosts.candidate" "$SECURE_DIR/known_hosts"
-export ANSIBLE_CONFIG="$PWD/infra/ansible/ansible.cfg"
-export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$SECURE_DIR/known_hosts"
-.runtime/venv/bin/ansible-playbook -i "$SECURE_DIR/inventory.ini" \
-  --private-key "$HOME/.ssh/gradeflow" infra/ansible/site.yml
-.runtime/venv/bin/ansible-playbook -i "$SECURE_DIR/inventory.ini" \
-  --private-key "$HOME/.ssh/gradeflow" infra/ansible/site.yml
-ssh -i "$HOME/.ssh/gradeflow" -o UserKnownHostsFile="$SECURE_DIR/known_hosts" \
-  -o StrictHostKeyChecking=yes ubuntu@"$VM_IP" 'sudo k3s kubectl get nodes'
-```
-
-Keep `SECURE_DIR`, SSH/OCI private keys and state outside cloud-synced folders such as OneDrive. `.gitignore` prevents Git staging, not cloud-drive upload. Set `VM_IP` and `SECURE_DIR` in each new terminal. K3s needs host/pod forwarding. OCI Ubuntu images may ship host firewall rules; inspect `sudo iptables-save` / `sudo ufw status` if pods fail. Do not disable the cloud SSH-only security list or open 6443/8472/10250 to the internet. If keeping UFW enabled, follow [K3s network requirements](https://docs.k3s.io/installation/requirements) for trusted pod/service CIDRs. This is a single-node cluster; external VXLAN traffic is unnecessary.
-
-Bootstrap the namespace/RBAC once as admin. Keep the following SSH tunnel running **on the same machine as kubectl/Jenkins' trusted agent**:
-
-```bash
-ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
-  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SECURE_DIR/known_hosts" \
-  -i "$HOME/.ssh/gradeflow" -L 127.0.0.1:16443:127.0.0.1:6443 ubuntu@"$VM_IP"
-```
-
-In a second terminal, copy the root kubeconfig over authenticated SSH, protect it, and change its server to the local tunnel. Do not print or commit it:
+Terraform meaningfully manages the controller container, dedicated Docker network and persistent Jenkins home volume using `kreuzwerker/docker`. It has **no OCI provider or cloud credentials**. Do not also start `ci/jenkins-compose.yaml`: it is a retained alternative, and would compete for the same port. No `terraform apply` has been run for you.
 
 ```bash
 umask 077
-ssh -i "$HOME/.ssh/gradeflow" -o StrictHostKeyChecking=yes \
-  -o UserKnownHostsFile="$SECURE_DIR/known_hosts" ubuntu@"$VM_IP" \
-  'sudo cat /etc/rancher/k3s/k3s.yaml' > "$SECURE_DIR/admin-kubeconfig"
-export KUBECONFIG="$SECURE_DIR/admin-kubeconfig"
-kubectl config set-cluster default --server=https://127.0.0.1:16443
-kubectl get nodes
-kubectl apply -f k8s/namespace.yaml -f k8s/deployer-rbac.yaml
-bash scripts/create-ci-kubeconfig.sh "$SECURE_DIR/ci-kubeconfig"
-# Scoped token expires in <=24 hours (server policy may shorten it); rotate it.
-# Store ci-kubeconfig as Jenkins Secret file 'gradeflow-kubeconfig'.
-KUBECONFIG="$SECURE_DIR/ci-kubeconfig" kubectl auth can-i patch deployments -n gradeflow
-KUBECONFIG="$SECURE_DIR/ci-kubeconfig" kubectl auth can-i get secrets -n gradeflow  # must say no
+mkdir -p "$HOME/.config/gradeflow/terraform"
+chmod 700 "$HOME/.config/gradeflow" "$HOME/.config/gradeflow/terraform"
+terraform -chdir=infra/local init -reconfigure -lockfile=readonly \
+  -backend-config="path=$HOME/.config/gradeflow/terraform/terraform.tfstate"
+terraform -chdir=infra/local fmt -check -recursive
+terraform -chdir=infra/local validate
+terraform -chdir=infra/local test        # mocked provider: no containers created
+terraform -chdir=infra/local plan -out="$HOME/.config/gradeflow/terraform/jenkins.tfplan"
 ```
 
-Namespace creation/RBAC is an administrator bootstrap task; normal CI never has cluster-admin. This educational Role can update workloads/services only within `gradeflow` and read rollout/pod status. A workload writer can still run code in that namespace: treat it as a production credential. Do not share the admin kubeconfig with Jenkins. Protect the admin file and remove its local copy when no longer needed.
-
-## Registry and first approved deployment
-
-Use GHCR with a package scoped to your fork. Choose visibility explicitly: a public image contains frontend code and the public Apps Script URL; a private image requires a read-only pull credential in Kubernetes. No image is published by local tests. Use a token with package write permission only for Jenkins publishing; do not reuse the OCI/SSH credential. Authenticate interactively or via a secret manager, never a token literal in shell history.
+Inspect the plan: one network, one volume, image pull and loopback controller container. **Only if you approve these local resources**, run:
 
 ```bash
+terraform -chdir=infra/local apply "$HOME/.config/gradeflow/terraform/jenkins.tfplan"
+rm "$HOME/.config/gradeflow/terraform/jenkins.tfplan"
+docker exec gradeflow-jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+Treat that password as secret. Visit `http://127.0.0.1:8081`, unlock Jenkins, install suggested plugins plus **GitHub Branch Source**, **Pipeline**, **Credentials Binding** and **Pipeline: Input Step** if missing. Create an administrator with username **gradeflow-admin** (the pipeline approval allowlist). Enable authentication, deny anonymous access, set the controller's built-in node executors to **0**, and leave the inbound TCP agent port disabled. Set Jenkins URL to `http://127.0.0.1:8081/`.
+
+Keep Terraform state outside workspaces because Jenkins deletes its workspace after builds. Back up the state and `gradeflow-jenkins-home` volume privately; that volume contains Jenkins credentials. Never commit either. The volume has `prevent_destroy`; do not remove this protection casually. Normal reconciliation is another reviewed plan/apply. Do not run destroy as a cleanup shortcut.
+
+### 4. Connect a trusted local host agent
+
+In **Manage Jenkins → Nodes → New Node**, create permanent node **gradeflow-local**, remote root `/home/YOUR_LINUX_USER/jenkins-agent`, label **gradeflow-local**, **1 executor**, usage “only build jobs with label expressions matching this node”. Choose “Launch agent by connecting it to the controller”. Save. Use the displayed agent secret, not an invented value.
+
+In a dedicated Ubuntu terminal (same user as Docker and the tool installation):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+mkdir -p "$HOME/jenkins-agent" "$HOME/.config/gradeflow"
+chmod 700 "$HOME/.config/gradeflow"
+curl -fsSLo "$HOME/jenkins-agent/agent.jar" http://127.0.0.1:8081/jnlpJars/agent.jar
+read -rsp 'Paste node secret from Jenkins: ' AGENT_SECRET; echo
+(umask 077; printf '%s' "$AGENT_SECRET" > "$HOME/.config/gradeflow/agent-secret")
+unset AGENT_SECRET
+java -jar "$HOME/jenkins-agent/agent.jar" -url http://127.0.0.1:8081/ \
+  -secret @"$HOME/.config/gradeflow/agent-secret" -name gradeflow-local \
+  -webSocket -workDir "$HOME/jenkins-agent"
+```
+
+Leave this terminal running. No port 50000 or public webhook is needed. Do not attach this agent to PR jobs or other untrusted projects. If WSL cannot reach localhost 8081, fix Desktop WSL integration/localhost forwarding; do not change the binding to `0.0.0.0`.
+
+### 5. Create the main-only Jenkins job and verify local deployment
+
+Create a **Multibranch Pipeline** named `GradeFlow-main`. Add a Git source with repository **`https://github.com/Joshi-taro/GradeFlow.git`** (public clone needs no token). Add **Filter by name (with wildcards)**, include **main**, exclude blank. Do not enable PR discovery or fork discovery. Script path: `Jenkinsfile`. Configure a periodic folder scan (e.g. 5 minutes) or use “Scan Multibranch Pipeline Now”; no public webhook required. Only administrators should configure jobs or credentials.
+
+The first indexing build installs the parameters and runs validation/build only. Next open the **main** child job → **Build with Parameters**, enable **DEPLOY_LOCAL**, leave **DEPLOY_RENDER unchecked**. This creates/reconciles kind through Ansible, loads `gradeflow:<full Git SHA>` directly into kind (no image publish), applies the preserved two-replica manifests, waits for rollout and smoke-tests the service. Terraform validation in Jenkins uses mocks; the controller's real apply remains an operator action so a build cannot replace its own controller.
+
+Independent local commands, if you want to inspect each step:
+
+```bash
+.runtime/venv/bin/ansible-playbook -i localhost, infra/ansible/local.yml
+.runtime/venv/bin/ansible-playbook -i localhost, infra/ansible/local.yml # expect changed=0
 COMMIT=$(git rev-parse HEAD)
-IMAGE="ghcr.io/joshi-taro/gradeflow:$COMMIT"
-docker login ghcr.io                 # username + package token at prompt
-docker buildx create --name gradeflow-builder --driver docker-container --use
-docker buildx build --platform linux/amd64,linux/arm64 --tag "$IMAGE" --push .
-docker buildx imagetools inspect "$IMAGE"   # verify both platforms
-export KUBECONFIG="$SECURE_DIR/ci-kubeconfig"
-bash scripts/deploy.sh "$IMAGE"
-bash scripts/verify-rollout.sh "$IMAGE"
-bash scripts/deploy-smoke.sh
-kubectl -n gradeflow port-forward --address 127.0.0.1 service/gradeflow 8080:80
+docker build -t "gradeflow:$COMMIT" .
+bash scripts/local-deploy.sh "gradeflow:$COMMIT"
+export KUBECONFIG="$HOME/.config/gradeflow/kubeconfig"
+kubectl --context kind-gradeflow -n gradeflow get pods
+kubectl --context kind-gradeflow -n gradeflow port-forward --address 127.0.0.1 service/gradeflow 8080:80
+# Open http://127.0.0.1:8080; Ctrl-C stops only the port-forward.
 ```
 
-For private GHCR packages, an administrator creates an `imagePullSecret` in `gradeflow` using a temporary protected Docker config and patches the namespace's default ServiceAccount **before deployment**:
+The second Ansible run checks Docker/kind, reconciles private credentials and namespace, and does not recreate an existing cluster. Cluster version changes require a deliberate operator migration; this playbook does not silently delete/rebuild clusters. Two replicas on one laptop are not high availability.
+
+### 6. Connect Render to your fork and approve the first public deployment
+
+You already have a Render account. Sign in, choose **New → Web Service**, connect GitHub, and grant Render access to **Joshi-taro/GradeFlow only**. Do not select your friend's repository. Choose these values (also recorded in `render.yaml`):
+
+| Setting | Exact value |
+|---|---|
+| Repository / branch | `Joshi-taro/GradeFlow` / `main` |
+| Runtime | Docker |
+| Root directory | blank (repository root) |
+| Dockerfile / context | `./Dockerfile` / `.` |
+| Instance type | **Free** |
+| Health check path | `/healthz` |
+| Environment variable | `PORT=8080` |
+| Auto-Deploy | **Off** |
+| Docker command override | blank (preserve Dockerfile command) |
+| Disks / databases / previews | none / none / disabled |
+
+The existing Nginx binds `0.0.0.0:8080`, has `EXPOSE 8080`, and serves `/healthz`; Render terminates HTTPS. Nginx does not dynamically substitute PORT, so keep PORT set to 8080. Keep the Free build/compute options; stop if payment is requested.
+
+**Clicking Create Web Service starts the first public build/deploy, even with auto-deploy off.** This is your explicit manual publication approval; review the public contents first. No account action has been taken for you. Alternatively importing `render.yaml` as a Blueprint also requires approval and starts an initial deploy; do not create both services.
+
+Wait for Render to report Live. Record the assigned HTTPS `onrender.com` URL and actual commit. In your terminal:
 
 ```bash
-# Use the admin kubeconfig for these two operations; the CI Role cannot read secrets.
-# ~/.docker/config.json must contain auth for GHCR; Docker Desktop credential-store
-# references are not portable. Use a separate temporary DOCKER_CONFIG and docker login
-# with a read:packages token, then point --from-file at that config.json instead.
-kubectl -n gradeflow create secret generic ghcr-pull \
-  --from-file=.dockerconfigjson=YOUR_SECURE_DOCKER_CONFIG_JSON \
-  --type=kubernetes.io/dockerconfigjson
-kubectl -n gradeflow patch serviceaccount default \
-  -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
+node scripts/smoke.mjs https://YOUR-SERVICE.onrender.com
 ```
 
-Do not overwrite commit tags with different content. For stronger immutability, record the manifest digest from `imagetools inspect` and deploy `ghcr.io/joshi-taro/gradeflow@sha256:...`; both scripts accept a full Git SHA tag or digest. Keep prior images for rollback. Private image pull credentials must be rotated separately from the Jenkins push token.
+Allow a cold start and rerun if necessary. Open the URL and test refresh/submissions/error states. The smoke checks static assets and health, not private Google data. Verify the actual Google Apps Script deployment grants intended read access and supports browser CORS. Never paste student data or secrets into screenshots.
 
-## Jenkins setup and CI/CD execution
+### 7. Store Render credentials in Jenkins, then request an approved release
 
-1. On your laptop/private Linux host, review then run `docker compose -f ci/jenkins-compose.yaml up -d`. Open `http://127.0.0.1:8081`. Get the initial password locally with `docker compose -f ci/jenkins-compose.yaml exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword`. Complete the wizard, create `gradeflow-admin`, require login, disable anonymous access, enable CSRF protection, and restrict job configuration/credential access to administrators. Do not open 8081 or agent ports on OCI. Remote access, if needed, uses an SSH tunnel. The controller image is digest-pinned; review plugin/core updates deliberately.
-2. Install Pipeline, Pipeline: Declarative, Git, GitHub Branch Source, Credentials Binding, SSH Credentials, Timestamper and Workspace Cleanup plugins. Set controller executors to **0**. Add a separate trusted Linux agent via outbound WebSocket (agent instructions appear in Jenkins). Assign label `gradeflow-trusted`, one executor; install Java 21, Node/npm, Python/venv, Terraform, kubectl, Docker/Buildx, curl, Git and SSH. The controller has **no Docker socket mount**. A trusted Docker agent has root-equivalent build power; dedicate it to reviewed main builds. Never expose its Docker socket/API over TCP.
-3. PR jobs use a **separate disposable** `gradeflow-untrusted` agent with Node/Python/Terraform, no deployment credentials, no privileged Docker daemon and no shared filesystem/user with trusted builds. The declarative `when` gates protect normal PR behavior, but a malicious Jenkinsfile can change gates/labels. Enforce the boundary in Jenkins permissions/job/folder/agent restrictions, not just source code. Prefer running PRs only in the credential-free GitHub Actions workflow and configure the privileged Jenkins multibranch job to discover **main only**, with PR discovery disabled. If Jenkins PR builds are required, use a separate credential-free controller/job that cannot select the trusted agent. See [Jenkins SCM credential security](https://www.jenkins.io/doc/book/security/securing-org-folders-and-multibranch-pipelines/).
-4. Create a Multibranch Pipeline with repository URL `https://github.com/Joshi-taro/GradeFlow.git`, script `Jenkinsfile`, branch filter `main` and a periodic scan (e.g. every 15 minutes). This works without a public webhook endpoint. Protect main in your fork, require CI checks/review, and restrict who may change Jenkinsfile/infra. Only approved main code receives credentials. Do not point the job at your friend's repository.
-5. On the trusted agent, create persistent encrypted state storage owned by its OS account (replace `jenkins` with that account if different): `sudo install -d -m 700 -o jenkins -g jenkins /var/lib/gradeflow-state`. If Terraform was run manually, **move the existing protected state and backup into this backend path with a reviewed backend migration**; never initialize a second empty state for the same VM. Keep one state owner/job. Keep the API SSH tunnel active on this agent and its public egress IP equal to `admin_cidr`. Its `127.0.0.1` is separate from the controller container/laptop.
-6. Add folder-scoped Jenkins credentials using the table below. `gradeflow-admin` is the only listed approval submitter; adjust this literal to your authorized Jenkins user/group if needed. Give that account Build/Read/Input permissions and keep Configure/credential access restricted.
+Render Account Settings → API Keys: create a dedicated key for this demonstration. Render Service Settings/Dashboard URL: copy the **service ID** beginning `srv-`. Do not use the secret deploy-hook URL. Keep the API key private and revoke it when no longer needed; it may have broader account access than this one service.
 
-| Credential ID | Jenkins type | Content / needed when |
+In Jenkins, put credentials in the `GradeFlow-main` folder's credential store (restrict job configuration rights):
+
+| Jenkins type | ID | Value |
 |---|---|---|
-| `ghcr-publisher` | Username with password | GitHub login + package write token; publish only |
-| `oci-api-key` | Secret file | OCI API PEM private key; provisioning only |
-| `oci-tenancy`, `oci-user`, `oci-fingerprint` | Secret text, one each | Matching OCI identity values; provisioning only |
-| `gradeflow-tfvars` | Secret file | Reviewed filled tfvars with free-tier acknowledgement; provisioning only |
-| `gradeflow-ssh` | SSH username with private key | `ubuntu` + approved VM private key; Ansible only; load passphrase-protected keys in a secured agent or use a dedicated protected automation key |
-| `gradeflow-inventory` | Secret file | Filled inventory for the current approved VM IP; Ansible only |
-| `gradeflow-known-hosts` | Secret file | Host keys verified through a trusted channel; Ansible only |
-| `gradeflow-kubeconfig` | Secret file | Namespace-scoped kubeconfig using 127.0.0.1:16443, valid token and CA; deploy only |
-| `gradeflow-status-webhook` | Secret text | Optional Slack HTTPS webhook; `NOTIFY` only |
+| Secret text | `render-api-key` | Your real Render API key |
+| Secret text | `render-service-id` | Your service's `srv-...` ID |
 
-Start with all checkboxes false. Jenkins performs checkout → locked dependency install → lint → unit/DOM tests → offline Terraform validation/mock tests + Ansible syntax → native Docker build and hardened container smoke. Publishing, infrastructure, configuration and rollout are opt-in; PRs skip them. `PUBLISH_IMAGE` publishes the exact commit tag for both platforms. `PROVISION_INFRA` generates a saved plan and pauses for human approval before applying that exact plan. `CONFIGURE_VM` pauses before SSH configuration. `DEPLOY` requires publishing and a human approval, then applies manifests, waits for rollout, verifies the image, and smoke-tests the ClusterIP via loopback port-forward. The post block always reports build status locally; `NOTIFY` sends actual final status and whether rollout was verified to the credential-configured Slack destination. No notifier runs on PRs.
+Do not put credentials in Git, a Jenkins parameter, Terraform state, Render frontend variables or shell history. The pipeline binds them only after the human gate. It validates the service is Free, Docker, fork/main, `/healthz`, with auto-deploy off and no disk. It submits the exact tested commit, polls the returned deployment ID, checks the deployed SHA, then smoke-tests the public URL. A failed or timed-out request fails the build; it does not repeatedly submit deploys.
 
-For the first cloud run use **PROVISION_INFRA only**, approve only the reviewed plan, then update verified host keys/inventory to the new output IP. Next run **CONFIGURE_VM only**. Bootstrap RBAC and rotate/store the scoped kubeconfig as above. Then run **PUBLISH_IMAGE + DEPLOY**. On later approved application updates use those last two checkboxes; avoid reprovisioning a working VM. Every gate is intentional: a new VM needs a verified host identity and admin bootstrap before CI can use scoped access. Configure a persistent SSH tunnel/service as the trusted agent's OS user using the verified key/known_hosts; a laptop tunnel cannot serve a remote/containerized agent.
+Run **Build with Parameters** on `main` with **DEPLOY_LOCAL=true** and **DEPLOY_RENDER=true**. After all local checks pass, sign in as **gradeflow-admin**, inspect the commit/service/Free plan and approve “Approve public Render release”. Declining or timing out prevents the API call. Wait for both the Render API confirmation and the six public smoke checks. Only then record the URL as verified. No registry publishing is involved.
 
-The Jenkins publish stage creates/removes a dedicated Buildx builder, records the published manifest digest, and deploys that digest while retaining the full commit tag for traceability. Validate the declarative file against your configured Jenkins before the first build: `curl --fail --user YOUR_JENKINS_USERNAME -F 'jenkinsfile=<Jenkinsfile' http://127.0.0.1:8081/pipeline-model-converter/validate` (enter a Jenkins API token at curl's password prompt; do not paste it into the command). The response must say the Jenkinsfile was successfully validated.
+### 8. Capture evidence and test rollback
 
-Jenkins credentials are masked, not magically safe from code running with them. Keep them out of source, logs, Docker build args, test processes, PR jobs and archived plans. The pipeline deletes its workspace; state lives outside it. Optional GitHub Actions now runs only the same frontend and static infra checks with read-only repository permissions. In a new fork, enable workflows from its Actions tab if GitHub has disabled them; no hosted Actions result is claimed by the local verification record. It has no Netlify deployment or production credential bindings. Disconnect any legacy Netlify auto-deploy separately if you want Jenkins to be the sole release system; external Netlify settings are not managed here.
+Save screenshots of Jenkins stage results and approval, Render Free plan/auto-deploy off/commit, public UI, two ready kind pods, Terraform plan, and Ansible's second run with `changed=0`. Redact secrets and student data. See [verification record](docs/LOCAL-RENDER-VERIFICATION.md) for what was actually tested before your account setup.
 
-## Updates, rollback and failure diagnosis
-
-Each release uses a full 40-character commit tag or digest. Two replicas roll with maxUnavailable=0/maxSurge=1, readiness/startup/liveness probes and a 180s progress deadline. On a failed rollout Jenkins fails; it does not silently mark success or automatically mutate production again. Inspect before manually rolling back:
+For a local rollback, select a previously tested full SHA that is on main and rebuild/load that version before deploying it. This works even if kind has discarded an older cached image:
 
 ```bash
-kubectl -n gradeflow get pods
-kubectl -n gradeflow describe deployment gradeflow
-kubectl -n gradeflow get events --sort-by=.metadata.creationTimestamp
-kubectl -n gradeflow logs -l app=gradeflow --tail=100
+export KUBECONFIG="$HOME/.config/gradeflow/kubeconfig"
 kubectl -n gradeflow rollout history deployment/gradeflow
-kubectl -n gradeflow rollout undo deployment/gradeflow --to-revision=YOUR_GOOD_REVISION
-kubectl -n gradeflow rollout status deployment/gradeflow --timeout=180s
-ROLLBACK_IMAGE=$(kubectl -n gradeflow get deployment gradeflow -o jsonpath='{.spec.template.spec.containers[0].image}')
-bash scripts/deploy.sh "$ROLLBACK_IMAGE"  # align kubectl apply's saved configuration after undo
-# Alternative: redeploy an explicitly recorded known-good commit image:
-bash scripts/deploy.sh ghcr.io/joshi-taro/gradeflow:YOUR_FULL_40_CHARACTER_GOOD_COMMIT
+GOOD_SHA=REPLACE_WITH_PREVIOUS_FULL_MAIN_COMMIT
+# From your operator checkout, with a clean working tree:
+git switch --detach "$GOOD_SHA"
+docker build -t "gradeflow:$GOOD_SHA" .
+kind load docker-image --name gradeflow "gradeflow:$GOOD_SHA"
+bash scripts/deploy.sh "gradeflow:$GOOD_SHA"
 bash scripts/deploy-smoke.sh
+git switch main
 ```
 
-`ImagePullBackOff`: check architecture, tag existence, GHCR visibility and pull secret. `Pending`: check available VM memory/CPU and surge capacity. `CrashLoopBackOff`: verify /tmp volume permissions, UID 101 and nginx config. API failure with healthy pods: inspect browser Network/Console for Apps Script redirects, CORS, permission, quota and exact Form headers. Do not set `mode:no-cors`: opaque responses cannot be read as JSON. SSH failure: check current operator /32, VM IP, security list, host keys and public-key authentication. Expired CI token: regenerate with admin credentials and update Jenkins; never disable TLS verification.
+For Render, manually approve a rollback to a known-good previous deploy in its dashboard and verify the public URL again. Free supports only a limited number of previous deploy rollbacks; keep the source SHA in your evidence. For the normal reviewed pipeline path, revert the faulty commit on main in a new PR, run checks, merge, and approve a fresh Jenkins release. Never use `latest` for Kubernetes. A failed rollout is reported, not automatically hidden by rollback.
 
-## External API contract and viva/screenshots
+## Audit, retained legacy files and viva
 
-`config.js` retains the original public `/exec` endpoint. The owner must maintain its Google deployment and permission policy. JSON must be an array of objects with `Student Name`, `Assignment Name`, `Submission Link (Google Drive / GitHub Link)` and `Timestamp`. Prefer ISO-8601 timestamps including timezone; ambiguous locale strings cannot be normalized reliably. Missing names/titles get labels, invalid/missing dates show unavailable, non-HTTP(S) links cannot open, and non-array/error payloads show retry. Endpoint URLs and frontend config are public browser data, never secrets. This repository does not include the Apps Script source or provision Google resources; verify with the owner that permitted browsers can follow the redirect and read JSON.
+The original defect audit is [docs/AUDIT.md](docs/AUDIT.md). This change fixes an architectural blocker: OCI signup requires payment verification, the primary Jenkins pipeline required GHCR publishing and OCI/K3s credentials, and the old README centered a cloud VM. The existing Dockerfile, frontend/API, 13 original tests, manifests, and deployment/smoke scripts remain intact. New tests cover Render safety and failure handling.
 
-Capture genuine evidence after each successful run, with student data and credentials redacted:
+Optional historical OCI path: [docs/OCI-LEGACY.md](docs/OCI-LEGACY.md), `infra/terraform/`, `infra/ansible/site.yml`, and `ci/Jenkinsfile.oci`. These are **not used by the primary pipeline**. Legacy docs describe actions requiring separate approval and an eligible account; do not follow them for the no-card setup. Existing OCI mock checks remain credential-free in GitHub Actions.
 
-- Fork URL and reviewed PR/commits; GitHub checks green, plus a deliberately failing test demonstration on a throwaway branch.
-- Jenkins stage view, paused infrastructure/deployment approvals, commit tag and final build status; no secrets visible.
-- `npm run check`, Terraform mocks and Ansible syntax output; second Ansible run's changed count.
-- `docker inspect` non-root/read-only/health status and registry manifest showing amd64/arm64.
-- OCI Always Free shape/allowance and SSH-only ingress, if actually provisioned; no claim of cloud deployment from local screenshots.
-- `kubectl get pods`, rollout status/history, port-forward URL and browser submissions/refresh/error states; record rollback result separately.
-- Optional Slack status only after explicitly enabling notification for your destination.
-
-Viva explanation: Terraform declares the VM/network and keeps infrastructure state; Ansible idempotently configures Ubuntu and K3s; Docker packages the static frontend with Nginx; Kubernetes schedules, probes and rolls out containers; Jenkins coordinates checks and approved releases; Node tests catch real data/rendering errors. GitHub Actions provides a separate unprivileged review check. A SHA tag connects a release to its source commit, a digest fixes the exact image, readiness protects rollout traffic, and rollback selects a previous image. Google Apps Script is an external read API and remains independent of the deployment. The free single-node design demonstrates CI/CD, not fault-tolerant hosting or automatic grading.
+Viva: Terraform manages Jenkins container/network/volume lifecycle and state. Ansible reconciles the local cluster prerequisites, private kubeconfig and namespace. Docker packages the unchanged frontend as non-root Nginx. Kubernetes provides two replicas, probes, resource limits and rolling updates. Jenkins runs tests and coordinates approved releases; GitHub Actions checks PRs independently, including disposable kind integration. Render serves the public Docker build of the same commit. Google Apps Script remains an independent external data dependency; neither Nginx health nor mocked tests prove that API works.
