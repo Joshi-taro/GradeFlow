@@ -1,0 +1,31 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const {JSDOM} = require('jsdom');
+test('late stale refresh cannot overwrite newer data', async () => {
+    const dom = new JSDOM(fs.readFileSync('index.html','utf8'),{runScripts:'outside-only',url:'https://gradeflow.test'});
+    let firstResolve;
+    let calls=0;
+    const response = name => ({ok:true,json:async()=>[{'Student Name':name}]});
+    dom.window.fetch = () => ++calls === 1 ? new Promise(resolve=>{firstResolve=resolve;}) : Promise.resolve(response('New data'));
+    for (const file of ['config.js','core.js','script.js']) dom.window.eval(fs.readFileSync(file,'utf8'));
+    await new Promise(resolve=>setTimeout(resolve,20));
+    dom.window.document.querySelector('#refresh-data').click();
+    await new Promise(resolve=>setTimeout(resolve,10));
+    firstResolve(response('Old data'));
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(dom.window.document.querySelector('.student-name').textContent,'New data');
+    dom.window.close();
+});
+test('a timed-out API request displays retry', async () => {
+    const dom = new JSDOM(fs.readFileSync('index.html','utf8'),{runScripts:'outside-only',url:'https://gradeflow.test'});
+    const nativeTimeout = dom.window.setTimeout.bind(dom.window);
+    dom.window.setTimeout = (fn, delay) => nativeTimeout(fn, delay===15000?1:delay);
+    dom.window.console.error = ()=>{};
+    dom.window.fetch = (url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted'))));
+    for (const file of ['config.js','core.js','script.js']) dom.window.eval(fs.readFileSync(file,'utf8'));
+    await new Promise(resolve=>setTimeout(resolve,40));
+    assert.equal(dom.window.document.querySelector('#last-updated').textContent,'Sync failed');
+    assert.ok(dom.window.document.querySelector('#submissions-grid button'));
+    dom.window.close();
+});
