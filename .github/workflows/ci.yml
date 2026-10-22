@@ -33,4 +33,5 @@ jobs:
           python-version: '3.12'
       - run: pip install -r infra/ansible/requirements.txt
       - run: ansible-playbook --syntax-check -i infra/ansible/inventory.ini.example infra/ansible/site.yml
-      - run: bash -n scripts/*.sh
+      - run: |
+          for script in scripts/*.sh; do bash -n "$script"; done

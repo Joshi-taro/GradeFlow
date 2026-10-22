@@ -127,30 +127,32 @@ After the VM exists, copy its public IP from Terraform outputs. Confirm the SSH 
 
 ```bash
 export VM_IP=YOUR_TERRAFORM_PUBLIC_IP
-mkdir -p .runtime
-cp infra/ansible/inventory.ini.example .runtime/inventory.ini
-# Edit ansible_host in .runtime/inventory.ini to the approved VM IP.
-ssh-keyscan -H "$VM_IP" > .runtime/known_hosts.candidate
-ssh-keygen -lf .runtime/known_hosts.candidate
+export SECURE_DIR="$HOME/.local/share/gradeflow-secrets"
+mkdir -p "$SECURE_DIR"
+chmod 700 "$SECURE_DIR"
+cp infra/ansible/inventory.ini.example "$SECURE_DIR/inventory.ini"
+# Edit ansible_host in "$SECURE_DIR/inventory.ini" to the approved VM IP.
+ssh-keyscan -H "$VM_IP" > "$SECURE_DIR/known_hosts.candidate"
+ssh-keygen -lf "$SECURE_DIR/known_hosts.candidate"
 # Compare with the verified console fingerprint BEFORE the next command.
-mv .runtime/known_hosts.candidate .runtime/known_hosts
+mv "$SECURE_DIR/known_hosts.candidate" "$SECURE_DIR/known_hosts"
 export ANSIBLE_CONFIG="$PWD/infra/ansible/ansible.cfg"
-export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/.runtime/known_hosts"
-.runtime/venv/bin/ansible-playbook -i .runtime/inventory.ini \
+export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$SECURE_DIR/known_hosts"
+.runtime/venv/bin/ansible-playbook -i "$SECURE_DIR/inventory.ini" \
   --private-key "$HOME/.ssh/gradeflow" infra/ansible/site.yml
-.runtime/venv/bin/ansible-playbook -i .runtime/inventory.ini \
+.runtime/venv/bin/ansible-playbook -i "$SECURE_DIR/inventory.ini" \
   --private-key "$HOME/.ssh/gradeflow" infra/ansible/site.yml
-ssh -i "$HOME/.ssh/gradeflow" -o UserKnownHostsFile=.runtime/known_hosts \
+ssh -i "$HOME/.ssh/gradeflow" -o UserKnownHostsFile="$SECURE_DIR/known_hosts" \
   -o StrictHostKeyChecking=yes ubuntu@"$VM_IP" 'sudo k3s kubectl get nodes'
 ```
 
-K3s needs host/pod forwarding. OCI Ubuntu images may ship host firewall rules; inspect `sudo iptables-save` / `sudo ufw status` if pods fail. Do not disable the cloud SSH-only security list or open 6443/8472/10250 to the internet. If keeping UFW enabled, follow [K3s network requirements](https://docs.k3s.io/installation/requirements) for trusted pod/service CIDRs. This is a single-node cluster; external VXLAN traffic is unnecessary.
+Keep `SECURE_DIR`, SSH/OCI private keys and state outside cloud-synced folders such as OneDrive. `.gitignore` prevents Git staging, not cloud-drive upload. Set `VM_IP` and `SECURE_DIR` in each new terminal. K3s needs host/pod forwarding. OCI Ubuntu images may ship host firewall rules; inspect `sudo iptables-save` / `sudo ufw status` if pods fail. Do not disable the cloud SSH-only security list or open 6443/8472/10250 to the internet. If keeping UFW enabled, follow [K3s network requirements](https://docs.k3s.io/installation/requirements) for trusted pod/service CIDRs. This is a single-node cluster; external VXLAN traffic is unnecessary.
 
 Bootstrap the namespace/RBAC once as admin. Keep the following SSH tunnel running **on the same machine as kubectl/Jenkins' trusted agent**:
 
 ```bash
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
-  -o StrictHostKeyChecking=yes -o UserKnownHostsFile=.runtime/known_hosts \
+  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SECURE_DIR/known_hosts" \
   -i "$HOME/.ssh/gradeflow" -L 127.0.0.1:16443:127.0.0.1:6443 ubuntu@"$VM_IP"
 ```
 
@@ -159,17 +161,17 @@ In a second terminal, copy the root kubeconfig over authenticated SSH, protect i
 ```bash
 umask 077
 ssh -i "$HOME/.ssh/gradeflow" -o StrictHostKeyChecking=yes \
-  -o UserKnownHostsFile=.runtime/known_hosts ubuntu@"$VM_IP" \
-  'sudo cat /etc/rancher/k3s/k3s.yaml' > .runtime/admin-kubeconfig
-export KUBECONFIG="$PWD/.runtime/admin-kubeconfig"
+  -o UserKnownHostsFile="$SECURE_DIR/known_hosts" ubuntu@"$VM_IP" \
+  'sudo cat /etc/rancher/k3s/k3s.yaml' > "$SECURE_DIR/admin-kubeconfig"
+export KUBECONFIG="$SECURE_DIR/admin-kubeconfig"
 kubectl config set-cluster default --server=https://127.0.0.1:16443
 kubectl get nodes
 kubectl apply -f k8s/namespace.yaml -f k8s/deployer-rbac.yaml
-bash scripts/create-ci-kubeconfig.sh "$PWD/.runtime/ci-kubeconfig"
+bash scripts/create-ci-kubeconfig.sh "$SECURE_DIR/ci-kubeconfig"
 # Scoped token expires in <=24 hours (server policy may shorten it); rotate it.
 # Store ci-kubeconfig as Jenkins Secret file 'gradeflow-kubeconfig'.
-KUBECONFIG="$PWD/.runtime/ci-kubeconfig" kubectl auth can-i patch deployments -n gradeflow
-KUBECONFIG="$PWD/.runtime/ci-kubeconfig" kubectl auth can-i get secrets -n gradeflow  # must say no
+KUBECONFIG="$SECURE_DIR/ci-kubeconfig" kubectl auth can-i patch deployments -n gradeflow
+KUBECONFIG="$SECURE_DIR/ci-kubeconfig" kubectl auth can-i get secrets -n gradeflow  # must say no
 ```
 
 Namespace creation/RBAC is an administrator bootstrap task; normal CI never has cluster-admin. This educational Role can update workloads/services only within `gradeflow` and read rollout/pod status. A workload writer can still run code in that namespace: treat it as a production credential. Do not share the admin kubeconfig with Jenkins. Protect the admin file and remove its local copy when no longer needed.
@@ -185,7 +187,7 @@ docker login ghcr.io                 # username + package token at prompt
 docker buildx create --name gradeflow-builder --driver docker-container --use
 docker buildx build --platform linux/amd64,linux/arm64 --tag "$IMAGE" --push .
 docker buildx imagetools inspect "$IMAGE"   # verify both platforms
-export KUBECONFIG="$PWD/.runtime/ci-kubeconfig"
+export KUBECONFIG="$SECURE_DIR/ci-kubeconfig"
 bash scripts/deploy.sh "$IMAGE"
 bash scripts/verify-rollout.sh "$IMAGE"
 bash scripts/deploy-smoke.sh
@@ -235,7 +237,7 @@ For the first cloud run use **PROVISION_INFRA only**, approve only the reviewed 
 
 The Jenkins publish stage creates/removes a dedicated Buildx builder, records the published manifest digest, and deploys that digest while retaining the full commit tag for traceability. Validate the declarative file against your configured Jenkins before the first build: `curl --fail --user YOUR_JENKINS_USERNAME -F 'jenkinsfile=<Jenkinsfile' http://127.0.0.1:8081/pipeline-model-converter/validate` (enter a Jenkins API token at curl's password prompt; do not paste it into the command). The response must say the Jenkinsfile was successfully validated.
 
-Jenkins credentials are masked, not magically safe from code running with them. Keep them out of source, logs, Docker build args, test processes, PR jobs and archived plans. The pipeline deletes its workspace; state lives outside it. Optional GitHub Actions now runs only the same frontend and static infra checks with read-only repository permissions. It has no Netlify deployment or production credential bindings. Disconnect any legacy Netlify auto-deploy separately if you want Jenkins to be the sole release system; external Netlify settings are not managed here.
+Jenkins credentials are masked, not magically safe from code running with them. Keep them out of source, logs, Docker build args, test processes, PR jobs and archived plans. The pipeline deletes its workspace; state lives outside it. Optional GitHub Actions now runs only the same frontend and static infra checks with read-only repository permissions. In a new fork, enable workflows from its Actions tab if GitHub has disabled them; no hosted Actions result is claimed by the local verification record. It has no Netlify deployment or production credential bindings. Disconnect any legacy Netlify auto-deploy separately if you want Jenkins to be the sole release system; external Netlify settings are not managed here.
 
 ## Updates, rollback and failure diagnosis
 

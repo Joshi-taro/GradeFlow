@@ -49,11 +49,12 @@ pipeline {
         stage('Terraform validation') {
             steps {
                 sh '''
-                    terraform -chdir=infra/terraform fmt -check
+                    terraform -chdir=infra/terraform fmt -check -recursive
                     terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
                     terraform -chdir=infra/terraform validate
                     terraform -chdir=infra/terraform test
                     .runtime/venv/bin/ansible-playbook --syntax-check -i infra/ansible/inventory.ini.example infra/ansible/site.yml
+                    for script in scripts/*.sh; do bash -n "$script"; done
                 '''
             }
         }
