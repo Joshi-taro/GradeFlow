@@ -1,0 +1,17 @@
+node_modules/
+coverage/
+reports/
+.terraform/
+*.tfstate*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+*.pem
+*.key
+.env*
+!*.example
+inventory.ini
+kubeconfig*
+known_hosts
+.runtime/
+*.retry

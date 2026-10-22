@@ -29,7 +29,7 @@
         </div>
         <div class="sync-status" id="sync-status">
             <div class="pulse-dot"></div>
-            <span>Data synced: <strong id="last-updated">Just now</strong></span>
+            <span>Data synced: <strong id="last-updated" aria-live="polite">Not synced yet</strong></span>
         </div>
     </nav>
 
@@ -43,7 +43,7 @@
             A smarter way to track and access assignment submissions.<br>
             Automatically synced with Google Forms.
         </p>
-        <button class="btn-primary" id="view-submissions-btn">
+        <button type="button" class="btn-primary" id="view-submissions-btn">
             View Submissions <i class="ph-bold ph-arrow-down"></i>
         </button>
     </section>
@@ -58,7 +58,7 @@
                 <div class="section-header">
                     <h2>Live Submissions</h2>
                     <div class="filter-controls">
-                        <button class="icon-btn" id="refresh-data" title="Refresh API Data">
+                        <button type="button" class="icon-btn" id="refresh-data" title="Refresh API Data" aria-label="Refresh API Data">
                             <i class="ph ph-arrows-clockwise"></i>
                         </button>
                     </div>
@@ -88,13 +88,15 @@
     <footer class="site-footer">
         <div class="footer-content">
             <p>&copy; 2026 Created by Prishu Raj Singh</p>
-            <p class="footer-subtitle">Powered by Google Apps Script & GitHub Actions</p>
+            <p class="footer-subtitle">Powered by Google Apps Script &amp; automated CI/CD</p>
         </div>
     </footer>
 
     <!-- GSAP & JS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollToPlugin.min.js"></script>
+    <script src="config.js"></script>
+    <script src="core.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
