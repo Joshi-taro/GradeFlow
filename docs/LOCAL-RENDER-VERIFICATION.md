@@ -9,8 +9,8 @@ Prepared 2026-10-22. This record distinguishes offline/local checks from account
 | Local Terraform | fmt, validate and 1 mocked Docker-provider test passed; Linux amd64/arm64 and Windows checksums locked |
 | Legacy OCI Terraform mocks | 3 passed; no OCI credentials or resource operations |
 | Local Ansible | Syntax check passed with ansible-core 2.19.3 / WSL Python 3.12 |
-| Shell and YAML | All shell scripts parsed; Ansible, Render and Actions YAML parsed |
-| kind integration and Ansible idempotency | Automated disposable-runner job added; record actual PR result before claiming success |
+| Shell and YAML | All shell scripts parsed; Ansible, Render and Actions YAML parsed; Render Blueprint passed the official JSON Schema using jsonschema 4.26.0 |
+| kind integration and Ansible idempotency | [GitHub Actions run 39827472459](https://github.com/Joshi-taro/GradeFlow/actions/runs/39827472459) passed all three jobs; first Ansible run changed=3, second changed=0; two pods 1/1 Running; rollout and all six HTTP smoke paths passed |
 | Jenkins declarative execution | Requires your local controller, plugins, agent and job setup; not executed here |
 | Terraform local apply | Not executed; operator must review and explicitly approve the saved plan |
 | Render account / credentials / API deployment | Not configured, no requests sent to authenticated Render API |

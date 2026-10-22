@@ -19,7 +19,7 @@ export async function deployRender(env, {request = fetch, sleep = ms => new Prom
     const docker = details.envSpecificDetails || {};
     if (service.type !== 'web_service' || service.branch !== 'main' ||
         service.repo?.replace(/\.git$/, '').replace(/\/$/, '') !== 'https://github.com/Joshi-taro/GradeFlow' ||
-        service.autoDeploy !== 'no' || details.plan !== 'free' || details.runtime !== 'docker' ||
+        service.autoDeploy !== 'no' || details.plan !== 'free' || details.buildPlan !== 'starter' || details.runtime !== 'docker' ||
         details.healthCheckPath !== '/healthz' || details.disk) throw new Error('Service must be the fork/main Docker Free service, auto-deploy off, /healthz, no disk');
     if (!['Dockerfile', './Dockerfile'].includes(docker.dockerfilePath) ||
         !['.', './', ''].includes(docker.dockerContext) || docker.dockerCommand || docker.preDeployCommand || service.rootDir) throw new Error('Expected root Dockerfile/context and no command overrides');

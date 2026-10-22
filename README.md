@@ -154,6 +154,7 @@ You already have a Render account. Sign in, choose **New → Web Service**, conn
 | Root directory | blank (repository root) |
 | Dockerfile / context | `./Dockerfile` / `.` |
 | Instance type | **Free** |
+| Build tier | Default Starter build tier, never Performance (this is separate from the instance type, which must remain Free) |
 | Health check path | `/healthz` |
 | Environment variable | `PORT=8080` |
 | Auto-Deploy | **Off** |

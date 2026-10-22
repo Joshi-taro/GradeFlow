@@ -1,7 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const env = {BRANCH_NAME: 'main', RENDER_APPROVED: 'yes', COMMIT: 'a'.repeat(40), RENDER_API_KEY: 'offline-test', RENDER_SERVICE_ID: 'srv-test'};
-const service = {type: 'web_service', branch: 'main', repo: 'https://github.com/Joshi-taro/GradeFlow', autoDeploy: 'no', serviceDetails: {plan: 'free', runtime: 'docker', healthCheckPath: '/healthz', url: 'https://gradeflow-test.onrender.com', envSpecificDetails: {dockerfilePath: './Dockerfile', dockerContext: '.', dockerCommand: ''}}};
+const service = {type: 'web_service', branch: 'main', repo: 'https://github.com/Joshi-taro/GradeFlow', autoDeploy: 'no', serviceDetails: {plan: 'free', buildPlan: 'starter', runtime: 'docker', healthCheckPath: '/healthz', url: 'https://gradeflow-test.onrender.com', envSpecificDetails: {dockerfilePath: './Dockerfile', dockerContext: '.', dockerCommand: ''}}};
 function fake(values) {
     const calls = [];
     return {calls, request: async (url, options) => {
@@ -21,7 +21,7 @@ test('Render refuses PRs, missing approval and non-SHA revisions before HTTP', a
 });
 test('Render rejects paid plans, auto deploys and another repository before POST', async () => {
     const {deployRender} = await import('../scripts/render-client.mjs');
-    for (const overrides of [{serviceDetails: {...service.serviceDetails, plan: 'starter'}}, {serviceDetails: {...service.serviceDetails, envSpecificDetails: {dockerfilePath: './wrong/Dockerfile'}}}, {autoDeploy: 'yes'}, {repo: 'https://github.com/prisshhhuuu/student-assignment-portal'}]) {
+    for (const overrides of [{serviceDetails: {...service.serviceDetails, plan: 'starter'}}, {serviceDetails: {...service.serviceDetails, buildPlan: 'performance'}}, {serviceDetails: {...service.serviceDetails, envSpecificDetails: {dockerfilePath: './wrong/Dockerfile'}}}, {autoDeploy: 'yes'}, {repo: 'https://github.com/prisshhhuuu/student-assignment-portal'}]) {
         const mock = fake([{...service, ...overrides}]);
         await assert.rejects(deployRender(env, mock));
         assert.equal(mock.calls.length, 1);
