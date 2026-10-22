@@ -1,98 +1,36 @@
-name: CI/CD Pipeline
-
+name: GradeFlow checks (no deployment)
 on:
   push:
-    branches:
-      - main
+    branches: [main, 'codex/**']
   pull_request:
-    branches:
-      - main
-
+    branches: [main]
+permissions:
+  contents: read
 jobs:
-  validate-and-test:
-    name: Validate Application
+  frontend:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
-        
-      - name: Verify Core Files Existence
-        run: |
-          if [ ! -f index.html ]; then echo "❌ index.html not found!"; exit 1; fi
-          if [ ! -f style.css ]; then echo "❌ style.css not found!"; exit 1; fi
-          if [ ! -f script.js ]; then echo "❌ script.js not found!"; exit 1; fi
-          echo "✅ All core files are present!"
-          
-      - name: Validate HTML Structure
-        run: |
-          grep -i "<html" index.html > /dev/null || (echo "❌ Missing HTML tag" && exit 1)
-          grep -i "<body" index.html > /dev/null || (echo "❌ Missing BODY tag" && exit 1)
-          echo "✅ HTML structure looks good!"
-
-      - name: Validate GSAP Import
-        run: |
-          grep -i "gsap.min.js" index.html > /dev/null || (echo "❌ Missing GSAP library" && exit 1)
-          echo "✅ GSAP is correctly imported for UI animations."
-
-      - name: CI Validation Success
-        run: echo "🚀 CI Pipeline passed! Ready for deployment."
-
-  notify-slack:
-    name: Slack Notification
-    needs: validate-and-test
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+  infrastructure-static:
     runs-on: ubuntu-latest
-    if: always()
     steps:
-      - name: Send Slack Deployment Alert
-        run: |
-          STATUS="${{ job.status }}"
-          COLOR="#22C55E" # Green for success
-          if [ "$STATUS" != "success" ]; then
-            COLOR="#EF4444" # Red for failure
-          fi
-          
-          PAYLOAD=$(cat <<EOF
-          {
-            "attachments": [
-              {
-                "color": "$COLOR",
-                "blocks": [
-                  {
-                    "type": "header",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "🚀 DevOps Deployment Alert",
-                      "emoji": true
-                    }
-                  },
-                  {
-                    "type": "section",
-                    "fields": [
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Project:*\nStudent Assignment Portal"
-                      },
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Status:*\n$STATUS"
-                      }
-                    ]
-                  },
-                  {
-                    "type": "context",
-                    "elements": [
-                      {
-                        "type": "mrkdwn",
-                        "text": "Code passed CI validation and is deploying to Netlify ✨"
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-          )
-          
-          curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" ${{ secrets.SLACK_WEBHOOK_URL }}
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.3'
+      - run: terraform -chdir=infra/terraform fmt -check -recursive
+      - run: terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/terraform validate
+      - run: terraform -chdir=infra/terraform test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r infra/ansible/requirements.txt
+      - run: ansible-playbook --syntax-check -i infra/ansible/inventory.ini.example infra/ansible/site.yml
+      - run: bash -n scripts/*.sh

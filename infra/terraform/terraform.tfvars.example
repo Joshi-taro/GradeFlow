@@ -1,0 +1,7 @@
+region                = "YOUR_HOME_REGION"
+compartment_ocid      = "ocid1.compartment..."
+availability_domain   = "YOUR_TENANCY_AD_NAME"
+ubuntu_arm_image_ocid = "ocid1.image..."
+ssh_public_key        = "ssh-ed25519 REPLACE_WITH_PUBLIC_KEY"
+admin_cidr            = "203.0.113.10/32"
+free_tier_confirmed   = false

@@ -1,0 +1,2 @@
+[gradeflow]
+k3s ansible_host=REPLACE_VM_IP ansible_user=ubuntu
