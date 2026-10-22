@@ -1,0 +1,35 @@
+# Bootstrap once as admin. The CI credential can update only this namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gradeflow-deployer
+  namespace: gradeflow
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gradeflow-deployer
+  namespace: gradeflow
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, create, update, patch]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gradeflow-deployer
+  namespace: gradeflow
+subjects:
+  - {kind: ServiceAccount, name: gradeflow-deployer, namespace: gradeflow}
+roleRef:
+  {apiGroup: rbac.authorization.k8s.io, kind: Role, name: gradeflow-deployer}

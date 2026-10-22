@@ -1,0 +1,13 @@
+# Controller only. Run on your laptop/private host AFTER approving local startup.
+# Complete setup wizard, enable authentication, disable anonymous access.
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21@sha256:a660310e39ade10631f774bacd5219de767dfd08947ea5c32a739b5e5bb382c1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+    # No Docker socket, no published inbound agent port. Use WebSocket agents.
+volumes:
+  jenkins_home:
