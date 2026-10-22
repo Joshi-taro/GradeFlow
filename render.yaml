@@ -1,0 +1,15 @@
+# Creating this Blueprint starts the FIRST public deployment: approve manually.
+services:
+  - type: web
+    name: gradeflow
+    runtime: docker
+    plan: free
+    repo: https://github.com/Joshi-taro/GradeFlow
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: 'off'
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: "8080"

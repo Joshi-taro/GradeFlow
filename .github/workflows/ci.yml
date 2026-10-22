@@ -29,10 +29,40 @@ jobs:
       - run: terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infra/terraform validate
       - run: terraform -chdir=infra/terraform test
+      - run: terraform -chdir=infra/local fmt -check -recursive
+      - run: terraform -chdir=infra/local init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/local validate
+      - run: terraform -chdir=infra/local test
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install -r infra/ansible/requirements.txt
       - run: ansible-playbook --syntax-check -i infra/ansible/inventory.ini.example infra/ansible/site.yml
+      - run: ansible-playbook --syntax-check -i localhost, infra/ansible/local.yml
       - run: |
           for script in scripts/*.sh; do bash -n "$script"; done
+  local-integration:
+    # Disposable GitHub runner only; no secrets, publishing, Render or cloud apply.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          curl -fsSLo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -fsSLo /tmp/kind.sha256 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum
+          printf '%s  /tmp/kind\n' "$(cut -d ' ' -f1 /tmp/kind.sha256)" | sha256sum -c -
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          pip install -r infra/ansible/requirements.txt
+      - run: ansible-playbook -i localhost, infra/ansible/local.yml
+      - name: Verify second Ansible run is idempotent
+        run: |
+          ansible-playbook -i localhost, infra/ansible/local.yml | tee /tmp/ansible-second.log
+          grep -E 'changed=0.*unreachable=0.*failed=0' /tmp/ansible-second.log
+      - run: docker build -t "gradeflow:$GITHUB_SHA" .
+      - run: bash scripts/local-deploy.sh "gradeflow:$GITHUB_SHA"

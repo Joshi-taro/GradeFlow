@@ -1,37 +1,38 @@
 pipeline {
-    // Configure these labels on separate, single-executor Linux agents. PR jobs
-    // must never share a user, workspace, Docker daemon or credentials with main.
-    agent { label "${env.BRANCH_NAME == 'main' && !env.CHANGE_ID ? 'gradeflow-trusted' : 'gradeflow-untrusted'}" }
+    // Main-only multibranch job. Never schedule PR code on this trusted agent.
+    agent { label 'gradeflow-local' }
     options {
         skipDefaultCheckout(true)
         disableConcurrentBuilds()
         timestamps()
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 45, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '15'))
     }
     parameters {
-        booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'Main only: push commit-tagged amd64/arm64 image to GHCR (review package visibility first).')
-        booleanParam(name: 'PROVISION_INFRA', defaultValue: false, description: 'Main only: plan OCI changes; a separate human approval is mandatory before apply.')
-        booleanParam(name: 'CONFIGURE_VM', defaultValue: false, description: 'Main only: configure an already approved VM using Ansible.')
-        booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Main only: deploy the image after human approval. Requires PUBLISH_IMAGE.')
-        booleanParam(name: 'NOTIFY', defaultValue: false, description: 'Main only: send the final build status to the configured Slack webhook credential.')
+        booleanParam(name: 'DEPLOY_LOCAL', defaultValue: false, description: 'Create/reconcile local kind and deploy two replicas (main only).')
+        booleanParam(name: 'DEPLOY_RENDER', defaultValue: false, description: 'After local verification, request approval to deploy the same commit to Render Free.')
     }
     environment {
-        IMAGE_REPOSITORY = 'ghcr.io/joshi-taro/gradeflow'
         TF_IN_AUTOMATION = 'true'
         TF_INPUT = 'false'
-        TF_STATE_PATH = '/var/lib/gradeflow-state/terraform.tfstate'
-        ANSIBLE_CONFIG = "${WORKSPACE}/infra/ansible/ansible.cfg"
     }
     stages {
-        stage('Checkout') {
+        stage('Checkout and release guard') {
             steps {
+                script {
+                    if (env.BRANCH_NAME != 'main' || env.CHANGE_ID) error('This trusted Jenkins job is main-only; PR checks run in GitHub Actions.')
+                    if (params.DEPLOY_RENDER && !params.DEPLOY_LOCAL) error('Render requires DEPLOY_LOCAL in the same build.')
+                }
                 checkout scm
                 script {
                     env.COMMIT = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    env.IMAGE = "${env.IMAGE_REPOSITORY}:${env.COMMIT}"
-                    if (params.DEPLOY && !params.PUBLISH_IMAGE) error('DEPLOY requires PUBLISH_IMAGE')
+                    env.IMAGE = "gradeflow:${env.COMMIT}"
                 }
+                sh '''
+                    test "$(git remote get-url origin)" = https://github.com/Joshi-taro/GradeFlow.git
+                    git fetch origin main
+                    git merge-base --is-ancestor "$COMMIT" origin/main
+                '''
             }
         }
         stage('Dependency setup') {
@@ -46,20 +47,21 @@ pipeline {
         }
         stage('Lint') { steps { sh 'npm run lint' } }
         stage('Tests') { steps { sh 'npm test' } }
-        stage('Terraform validation') {
+        stage('Terraform local validation') {
             steps {
+                // Controller infrastructure is applied once by its operator, not
+                // by a job that could replace its own controller. No cloud provider.
                 sh '''
-                    terraform -chdir=infra/terraform fmt -check -recursive
-                    terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
-                    terraform -chdir=infra/terraform validate
-                    terraform -chdir=infra/terraform test
-                    .runtime/venv/bin/ansible-playbook --syntax-check -i infra/ansible/inventory.ini.example infra/ansible/site.yml
+                    terraform -chdir=infra/local fmt -check -recursive
+                    terraform -chdir=infra/local init -backend=false -input=false -lockfile=readonly
+                    terraform -chdir=infra/local validate
+                    terraform -chdir=infra/local test
+                    .runtime/venv/bin/ansible-playbook --syntax-check -i localhost, infra/ansible/local.yml
                     for script in scripts/*.sh; do bash -n "$script"; done
                 '''
             }
         }
-        stage('Docker build and container smoke') {
-            when { allOf { branch 'main'; not { changeRequest() } } }
+        stage('Docker build and smoke') {
             steps {
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
@@ -75,106 +77,42 @@ pipeline {
                 '''
             }
         }
-        stage('Publish image') {
-            when { allOf { branch 'main'; not { changeRequest() }; expression { params.PUBLISH_IMAGE } } }
+        stage('Ansible local kind configuration') {
+            when { expression { params.DEPLOY_LOCAL } }
             steps {
-                withCredentials([usernamePassword(credentialsId: 'ghcr-publisher', usernameVariable: 'REGISTRY_USER', passwordVariable: 'REGISTRY_TOKEN')]) {
-                    sh '''#!/usr/bin/env bash
-                        set -euo pipefail
-                        set +x
-                        export DOCKER_CONFIG=$(mktemp -d)
-                        builder="gradeflow-${COMMIT:0:12}-${BUILD_NUMBER}"
-                        trap 'docker buildx rm "$builder" >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
-                        printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
-                        docker buildx create --name "$builder" --driver docker-container --use
-                        docker buildx build --platform linux/amd64,linux/arm64 --tag "$IMAGE" --push .
-                        docker buildx imagetools inspect "$IMAGE"
-                        docker buildx imagetools inspect "$IMAGE" --format '{{.Manifest.Digest}}' > .runtime/image-digest
-                    '''
-                }
-                script {
-                    def digest = readFile('.runtime/image-digest').trim()
-                    if (!(digest ==~ /sha256:[a-f0-9]{64}/)) error('Invalid published image digest')
-                    env.RELEASE_IMAGE = "${env.IMAGE_REPOSITORY}@${digest}"
-                }
+                sh '.runtime/venv/bin/ansible-playbook -i localhost, infra/ansible/local.yml'
             }
         }
-        stage('Terraform infrastructure provisioning (approved only)') {
-            when { allOf { branch 'main'; not { changeRequest() }; expression { params.PROVISION_INFRA } } }
+        stage('Kubernetes deploy and rollout validation') {
+            when { expression { params.DEPLOY_LOCAL } }
+            steps { sh 'bash scripts/local-deploy.sh "$IMAGE"' }
+        }
+        stage('Approve public Render release') {
+            when { expression { params.DEPLOY_RENDER } }
+            steps {
+                input message: "Approve PUBLIC Render Free deployment of tested main commit ${env.COMMIT}? Confirm Free plan and auto-deploy OFF.", submitter: 'gradeflow-admin'
+            }
+        }
+        stage('Render deploy and public URL verification') {
+            when { expression { params.DEPLOY_RENDER } }
             steps {
                 withCredentials([
-                    file(credentialsId: 'oci-api-key', variable: 'OCI_PRIVATE_KEY_PATH'),
-                    file(credentialsId: 'gradeflow-tfvars', variable: 'TFVARS'),
-                    string(credentialsId: 'oci-tenancy', variable: 'OCI_TENANCY_OCID'),
-                    string(credentialsId: 'oci-user', variable: 'OCI_USER_OCID'),
-                    string(credentialsId: 'oci-fingerprint', variable: 'OCI_FINGERPRINT')
+                    string(credentialsId: 'render-api-key', variable: 'RENDER_API_KEY'),
+                    string(credentialsId: 'render-service-id', variable: 'RENDER_SERVICE_ID')
                 ]) {
-                    sh '''
-                        set +x
-                        umask 077
-                        test -d /var/lib/gradeflow-state
-                        terraform -chdir=infra/terraform init -reconfigure -input=false -lockfile=readonly -backend-config="path=$TF_STATE_PATH"
-                        terraform -chdir=infra/terraform plan -input=false -lock-timeout=60s -var-file="$TFVARS" -out=approved.tfplan
-                    '''
-                    input message: 'Review the exact plan above, free-tier remaining allowance and capacity. Approve these OCI changes?', submitter: 'gradeflow-admin'
-                    sh 'terraform -chdir=infra/terraform apply -input=false -lock-timeout=60s approved.tfplan'
+                    withEnv(['RENDER_APPROVED=yes']) {
+                        sh 'set +x; node scripts/render-deploy.mjs'
+                    }
                 }
-            }
-        }
-        stage('Ansible configuration') {
-            when { allOf { branch 'main'; not { changeRequest() }; expression { params.CONFIGURE_VM } } }
-            steps {
-                input message: 'Approve configuration of the VM in gradeflow-inventory (SSH hardening and K3s install/upgrade)?', submitter: 'gradeflow-admin'
-                withCredentials([
-                    sshUserPrivateKey(credentialsId: 'gradeflow-ssh', keyFileVariable: 'SSH_KEY'),
-                    file(credentialsId: 'gradeflow-inventory', variable: 'INVENTORY'),
-                    file(credentialsId: 'gradeflow-known-hosts', variable: 'KNOWN_HOSTS')
-                ]) {
-                    sh '''
-                        set +x
-                        export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
-                        .runtime/venv/bin/ansible-playbook -i "$INVENTORY" --private-key "$SSH_KEY" infra/ansible/site.yml
-                    '''
-                }
-            }
-        }
-        stage('K3s deployment') {
-            when { allOf { branch 'main'; not { changeRequest() }; expression { params.DEPLOY } } }
-            steps {
-                input message: "Approve GradeFlow rollout of ${env.RELEASE_IMAGE} (${env.COMMIT})? Verify the SSH API tunnel and namespace-scoped kubeconfig are ready.", submitter: 'gradeflow-admin'
-                withCredentials([file(credentialsId: 'gradeflow-kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh 'bash scripts/deploy.sh "$RELEASE_IMAGE"'
-                }
-            }
-        }
-        stage('Kubernetes rollout validation') {
-            when { allOf { branch 'main'; not { changeRequest() }; expression { params.DEPLOY } } }
-            steps {
-                withCredentials([file(credentialsId: 'gradeflow-kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh 'bash scripts/verify-rollout.sh "$RELEASE_IMAGE" && bash scripts/deploy-smoke.sh'
-                }
-                script { env.DEPLOY_VERIFIED = 'true' }
             }
         }
     }
     post {
         always {
             script {
-                // Visible even without an external notification service.
-                echo "GradeFlow ${env.BUILD_TAG}: ${currentBuild.currentResult}; commit=${env.COMMIT ?: 'checkout incomplete'}; ${env.BUILD_URL}"
+                echo "GradeFlow ${currentBuild.currentResult}; commit=${env.COMMIT ?: 'unknown'}; ${env.BUILD_URL}"
                 currentBuild.description = "${currentBuild.currentResult}: ${(env.COMMIT ?: 'unknown').take(12)}"
-                if (env.BRANCH_NAME == 'main' && !env.CHANGE_ID && params.NOTIFY) {
-                    withEnv(["BUILD_STATUS=${currentBuild.currentResult}"]) {
-                        withCredentials([string(credentialsId: 'gradeflow-status-webhook', variable: 'STATUS_WEBHOOK')]) {
-                            catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                                sh 'node scripts/notify.mjs'
-                            }
-                        }
-                    }
-                }
             }
-            // Plans can contain sensitive infrastructure data: do not archive them.
-            sh 'rm -f infra/terraform/approved.tfplan'
             deleteDir()
         }
     }
