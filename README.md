@@ -68,6 +68,7 @@ npm run check
 python3 -m venv .runtime/venv
 .runtime/venv/bin/pip install -r infra/ansible/requirements.txt
 .runtime/venv/bin/ansible-playbook --syntax-check -i localhost, infra/ansible/local.yml
+PATH="$PWD/.runtime/venv/bin:$PATH" bash scripts/check-config.sh
 ```
 
 The installer verifies downloads against vendor checksum files over HTTPS. It supports Linux amd64 and arm64. Ansible runs on Linux, not native Windows. Node 20 is too old for the existing HTML validator.
@@ -216,3 +217,4 @@ The original defect audit is [docs/AUDIT.md](docs/AUDIT.md). This change fixes a
 Optional historical OCI path: [docs/OCI-LEGACY.md](docs/OCI-LEGACY.md), `infra/terraform/`, `infra/ansible/site.yml`, and `ci/Jenkinsfile.oci`. These are **not used by the primary pipeline**. Legacy docs describe actions requiring separate approval and an eligible account; do not follow them for the no-card setup. Existing OCI mock checks remain credential-free in GitHub Actions.
 
 Viva: Terraform manages Jenkins container/network/volume lifecycle and state. Ansible reconciles the local cluster prerequisites, private kubeconfig and namespace. Docker packages the unchanged frontend as non-root Nginx. Kubernetes provides two replicas, probes, resource limits and rolling updates. Jenkins runs tests and coordinates approved releases; GitHub Actions checks PRs independently, including disposable kind integration. Render serves the public Docker build of the same commit. Google Apps Script remains an independent external data dependency; neither Nginx health nor mocked tests prove that API works.
+
