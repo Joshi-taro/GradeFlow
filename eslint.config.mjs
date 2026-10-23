@@ -8,5 +8,9 @@ export default [{
   },
   rules: { 'no-unused-vars': 'error', 'no-undef': 'error', 'eqeqeq': 'error', 'no-eval': 'error' }
 }, {
+  files: ['google-apps-script/*.js'],
+  languageOptions: { globals: { ContentService: 'readonly', PropertiesService: 'readonly', Sheets: 'readonly' } },
+  rules: { 'no-unused-vars': ['error', { varsIgnorePattern: '^(doGet|doPost|validateSetup)$' }] }
+}, {
   files: ['**/*.mjs'], languageOptions: { sourceType: 'module' }
 }];

@@ -55,6 +55,7 @@ async function fetchData() {
         console.error('Error fetching data:', error);
         status.textContent = 'Sync failed';
         grid.innerHTML = '<div class="loading-wrapper"><p>Failed to load data. Check the Google Apps Script deployment and connection.</p><button type="button" class="btn-primary">Retry</button></div>';
+        if (!window.GRADEFLOW_CONFIG?.apiUrl) grid.querySelector('p').textContent = 'Google integration is not configured. Set your Apps Script /exec URL in config.js and rebuild.';
         grid.querySelector('button').addEventListener('click', fetchData);
     } finally { clearTimeout(timeout); }
 }
