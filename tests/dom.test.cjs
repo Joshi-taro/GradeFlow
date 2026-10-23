@@ -2,11 +2,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { JSDOM } = require('jsdom');
-async function boot(fetch) {
+async function boot(fetch, endpoint = 'https://script.google.com/macros/s/TEST_ONLY/exec') {
     const dom = new JSDOM(fs.readFileSync('index.html', 'utf8'), {runScripts:'outside-only', url:'https://gradeflow.test'});
     dom.window.fetch = fetch;
     dom.window.console.error = () => {};
     for (const file of ['config.js','core.js','script.js']) dom.window.eval(fs.readFileSync(file,'utf8'));
+    dom.window.GRADEFLOW_CONFIG.apiUrl = endpoint;
     await new Promise(resolve => setTimeout(resolve, 30));
     return dom;
 }
@@ -17,6 +18,14 @@ test('actual dashboard renders Sheet text safely, rejects executable links, work
     assert.equal(doc.querySelectorAll('.sub-card').length,1);
     assert.equal(doc.querySelector('.student-name').textContent,row['Student Name']);
     assert.equal(doc.querySelectorAll('.sub-card img, .sub-card script, .sub-card a, .activity-item script').length,0);
+    dom.window.close();
+});
+
+test('unconfigured endpoint makes no request and gives setup guidance', async () => {
+    let calls = 0;
+    const dom = await boot(async () => { calls++; }, '');
+    assert.equal(calls, 0);
+    assert.match(dom.window.document.querySelector('#submissions-grid').textContent, /config.js and rebuild/);
     dom.window.close();
 });
 test('HTTP failures and invalid API payloads show retry and failed sync', async () => {

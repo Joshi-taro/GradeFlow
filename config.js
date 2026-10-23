@@ -1,4 +1,6 @@
-// This is a public browser endpoint, never put credentials here.
+// Public build-time browser configuration; never put credentials here.
+// Follow google-apps-script/README.md, then paste YOUR deployed /exec URL.
+// Render environment variables do not automatically populate this static file.
 window.GRADEFLOW_CONFIG = {
-    apiUrl: 'https://script.google.com/macros/s/AKfycbwWE1gjvSSe0p2Z8RuT-3-m6W_JZSjj6CnwStWdMv9703ah_n3egWl9CZTLxS6tXHor/exec'
+    apiUrl: ''
 };

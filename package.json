@@ -5,7 +5,7 @@
   "packageManager": "npm@12.2.1",
   "engines": { "node": "^24.15.0" },
   "scripts": {
-    "lint": "eslint core.js script.js config.js tests scripts/*.mjs && html-validate index.html",
+    "lint": "eslint core.js script.js config.js google-apps-script/*.js tests scripts/*.mjs && html-validate index.html",
     "test": "node --test tests/*.test.cjs",
     "check": "npm run lint && npm test",
     "serve": "node scripts/serve.mjs",

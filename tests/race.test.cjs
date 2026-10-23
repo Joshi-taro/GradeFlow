@@ -9,6 +9,7 @@ test('late stale refresh cannot overwrite newer data', async () => {
     const response = name => ({ok:true,json:async()=>[{'Student Name':name}]});
     dom.window.fetch = () => ++calls === 1 ? new Promise(resolve=>{firstResolve=resolve;}) : Promise.resolve(response('New data'));
     for (const file of ['config.js','core.js','script.js']) dom.window.eval(fs.readFileSync(file,'utf8'));
+    dom.window.GRADEFLOW_CONFIG.apiUrl = 'https://script.google.com/macros/s/TEST_ONLY/exec';
     await new Promise(resolve=>setTimeout(resolve,20));
     dom.window.document.querySelector('#refresh-data').click();
     await new Promise(resolve=>setTimeout(resolve,10));
@@ -24,6 +25,7 @@ test('a timed-out API request displays retry', async () => {
     dom.window.console.error = ()=>{};
     dom.window.fetch = (url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted'))));
     for (const file of ['config.js','core.js','script.js']) dom.window.eval(fs.readFileSync(file,'utf8'));
+    dom.window.GRADEFLOW_CONFIG.apiUrl = 'https://script.google.com/macros/s/TEST_ONLY/exec';
     await new Promise(resolve=>setTimeout(resolve,40));
     assert.equal(dom.window.document.querySelector('#last-updated').textContent,'Sync failed');
     assert.ok(dom.window.document.querySelector('#submissions-grid button'));

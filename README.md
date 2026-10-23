@@ -4,6 +4,8 @@ GradeFlow displays Google Forms/Sheets submissions through an external Google Ap
 
 The primary path needs no cloud VM, registry subscription or credit card: Docker runs a private Jenkins controller, a trusted Linux/WSL host agent builds images, and kind runs two local replicas. Render Free hosts a separate public Docker web service built from the same approved Git commit. Render does **not** host Jenkins or the kind cluster, and its rebuilt image is not asserted to have the same digest as the locally built image.
 
+**Own your Google integration:** follow the [numbered Google Forms → private Sheets → read-only Apps Script setup](google-apps-script/README.md). The public frontend endpoint in `config.js` is intentionally blank until you configure your own `/exec` URL. Complete that setup before approving a new public deployment. Only owner-approved synthetic demo rows are published; this does not grant access to the previous developer's Drive files.
+
 ```mermaid
 flowchart TD
   G[Your GitHub fork / main] --> A[GitHub Actions: PR and push checks]
