@@ -53,7 +53,7 @@ Use this schema in the response tab (usually `Form Responses 1`):
 | D | `Submission Link (Google Drive / GitHub Link)` | Full HTTPS link to an owned demo file/repository |
 | E | `Publish` | Owner-only checkbox; unchecked by default |
 
-Forms may localize its timestamp header: rename A1 to exactly `Timestamp` if needed. Add `Publish` in E1 yourself, then select E2:E1001 → **Insert → Checkbox**, using default TRUE/FALSE values (no custom values). Do not give responders Sheet edit access. New/unchecked rows are not published. If Forms inserts a new row without checkbox validation, add its checkbox manually; blank is safely unpublished.
+Forms may localize its timestamp header: rename A1 to exactly `Timestamp` if needed. Add `Publish` in E1 yourself. After responses arrive, select only their corresponding E cells → **Insert → Checkbox**, using default TRUE/FALSE values (no custom values). Leave future rows blank rather than pre-filling a large range that could affect where Forms appends responses. Do not give responders Sheet edit access. Add the checkbox manually for each new response; blank and unchecked rows are safely unpublished.
 
 The mapper finds columns by header, tolerates reordered columns within A:Z, ignores extra fields (including emails), and rejects duplicate/missing required headers. Keep this dedicated demo Sheet small: maximum 1,000 response rows. Do not store real student information in it. Keep Sheet sharing **Restricted**; do not “Publish to web”.
 
@@ -70,7 +70,7 @@ These links refer to files in your own public fork; no Drive permission change i
 
 If you prefer Drive, use a new synthetic demo file you own and explicitly share only that file with the intended named testers. Restricted files will still require sign-in for those testers. For anonymous public visitors, prefer the owned public GitHub demo above. Never broadly share your Drive, a folder of student work, the response Sheet, or someone else's file.
 
-Check the two new rows in your Sheet. Inspect their contents, then check `Publish` only on one row initially so you can verify the exclusion rule later.
+Check the two new rows in your Sheet. Insert default checkboxes in their E cells, inspect their contents, then check `Publish` only on one row initially so you can verify the exclusion rule later.
 
 ### 4. Create a standalone Apps Script project and install the backend
 
