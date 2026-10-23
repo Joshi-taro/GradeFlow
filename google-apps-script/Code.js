@@ -21,7 +21,10 @@ function doGet() {
         // rather than guessing locale/DST and silently changing submission dates.
         if (!['Etc/UTC', 'UTC', 'Etc/GMT', 'GMT'].includes(metadata.properties.timeZone)) throw new Error('Sheet timezone must be UTC');
         const tab = properties.RESPONSE_SHEET_NAME.replace(/'/g, "''");
-        const result = Sheets.Spreadsheets.Values.get(properties.SPREADSHEET_ID, `'${tab}'!A1:Z1002`, {
+        // A quoted tab name is valid A1 notation for that whole tab. Reading it
+        // avoids out-of-grid ranges and lets the mapper reject oversized data
+        // instead of silently dropping records beyond a fixed range.
+        const result = Sheets.Spreadsheets.Values.get(properties.SPREADSHEET_ID, `'${tab}'`, {
             valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'SERIAL_NUMBER', majorDimension: 'ROWS'
         });
         return jsonOutput_(mapSheetRows_(result.values));

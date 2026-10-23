@@ -28,7 +28,7 @@ test('actual Apps Script maps exact frontend keys, trims text and serial dates',
     assert.equal(rows[0]['Student Name'], 'Demo Student 01');
     assert.equal(core.normalizeRows(rows)[0].assignment, 'Demo Lab');
     assert.equal(b.context.doGet().mime, 'application/json');
-    assert.equal(b.reads[1][1], "'Form''s Responses'!A1:Z1002");
+    assert.equal(b.reads[1][1], "'Form''s Responses'");
     assert.equal(b.reads[1][2].valueRenderOption, 'UNFORMATTED_VALUE');
 });
 

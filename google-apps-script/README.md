@@ -55,7 +55,7 @@ Use this schema in the response tab (usually `Form Responses 1`):
 
 Forms may localize its timestamp header: rename A1 to exactly `Timestamp` if needed. Add `Publish` in E1 yourself. After responses arrive, select only their corresponding E cells → **Insert → Checkbox**, using default TRUE/FALSE values (no custom values). Leave future rows blank rather than pre-filling a large range that could affect where Forms appends responses. Do not give responders Sheet edit access. Add the checkbox manually for each new response; blank and unchecked rows are safely unpublished.
 
-The mapper finds columns by header, tolerates reordered columns within A:Z, ignores extra fields (including emails), and rejects duplicate/missing required headers. Keep this dedicated demo Sheet small: maximum 1,000 response rows. Do not store real student information in it. Keep Sheet sharing **Restricted**; do not “Publish to web”.
+The mapper finds columns by header, tolerates reordered columns, ignores extra fields (including emails), and rejects duplicate/missing required headers. The backend reads the named response tab and rejects data over 1,000 response rows instead of truncating it. Keep this dedicated demo Sheet small; it is not designed for large datasets. Do not store real student information in it. Keep Sheet sharing **Restricted**; do not “Publish to web”.
 
 ### 3. Submit two synthetic records with links you control
 
